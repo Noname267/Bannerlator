@@ -13,6 +13,7 @@ import android.graphics.Point;
 import android.graphics.PointF;
 import android.graphics.Rect;
 import android.os.Handler;
+import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.util.Log;
@@ -110,6 +111,7 @@ public class InputControlsView extends View {
 
     private Handler timeoutHandler;
     private Runnable hideControlsRunnable; 
+    private long lastTimeoutResetMs;
 
     private static final long EDITOR_SETTINGS_LONG_PRESS_MS = 500L;
     private int editorLongPressTouchSlop;
@@ -149,9 +151,9 @@ public class InputControlsView extends View {
     }
 
     private static class VirtualStickState {
-        final Binding binding;
-        final float x;
-        final float y;
+        Binding binding;
+        float x;
+        float y;
 
         VirtualStickState(Binding binding, float x, float y) {
             this.binding = binding;
@@ -234,11 +236,26 @@ public class InputControlsView extends View {
             timeoutHandler.removeCallbacks(hideControlsRunnable);
         }
         this.editMode = editMode;
+        lastTimeoutResetMs = 0;
         setVisibility(View.VISIBLE);
         // #413: the editor always edits the FULL-screen authored layout, so re-measure back to full when
         // entering it and to the half again when leaving (onMeasure keys off editMode + screenAlignment).
         requestLayout();
         invalidate();
+    }
+
+    public void invalidateElement(ControlElement element) {
+        if (editMode || element == null || snappingSize <= 0) {
+            invalidate();
+            return;
+        }
+        Rect box = element.getBoundingBox();
+        if (box == null || box.isEmpty()) {
+            invalidate();
+            return;
+        }
+        int margin = snappingSize * 2;
+        invalidate(box.left - margin, box.top - margin, box.right + margin, box.bottom + margin);
     }
 
     public void setEditorBackgroundVisible(boolean visible) {
@@ -1530,6 +1547,9 @@ public class InputControlsView extends View {
 
     private void resetTouchscreenTimeout() {
         if (timeoutHandler != null && hideControlsRunnable != null) {
+            long now = SystemClock.uptimeMillis();
+            if (now - lastTimeoutResetMs < 250) return;
+            lastTimeoutResetMs = now;
             timeoutHandler.removeCallbacks(hideControlsRunnable);
             timeoutHandler.postDelayed(hideControlsRunnable, 5000); 
         }
@@ -1649,8 +1669,18 @@ public class InputControlsView extends View {
 
     public void handleStickInput(ControlElement owner, Binding firstBinding, float deltaX, float deltaY) {
         if (!isThumbBinding(firstBinding)) return;
-        if (deltaX == 0 && deltaY == 0) activeVirtualSticks.remove(owner);
-        else activeVirtualSticks.put(owner, new VirtualStickState(firstBinding, deltaX, deltaY));
+        VirtualStickState previous = activeVirtualSticks.get(owner);
+        if (deltaX == 0 && deltaY == 0) {
+            if (previous == null) return;
+            activeVirtualSticks.remove(owner);
+        } else if (previous != null) {
+            if (previous.binding == firstBinding && previous.x == deltaX && previous.y == deltaY) return;
+            previous.binding = firstBinding;
+            previous.x = deltaX;
+            previous.y = deltaY;
+        } else {
+            activeVirtualSticks.put(owner, new VirtualStickState(firstBinding, deltaX, deltaY));
+        }
 
         rebuildVirtualStickAxes();
         WinHandler winHandler = xServer != null ? xServer.getWinHandler() : null;
