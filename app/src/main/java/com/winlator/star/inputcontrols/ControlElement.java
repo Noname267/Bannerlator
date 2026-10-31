@@ -103,6 +103,18 @@ public class ControlElement {
     private boolean[] blockTouchscreenMouseButtons = {true, true, true, true};
     private boolean holdKeyActive;
     private final Path path = new Path();
+    private static final int GLASS_SLOTS = 5;
+    private final RadialGradient[] glassShaders = new RadialGradient[GLASS_SLOTS];
+    private final float[] glassCx = new float[GLASS_SLOTS];
+    private final float[] glassCy = new float[GLASS_SLOTS];
+    private final float[] glassRadius = new float[GLASS_SLOTS];
+    private final int[] glassAlpha = new int[GLASS_SLOTS];
+    private final Path[] dpadArrowPaths = {new Path(), new Path(), new Path(), new Path()};
+    private final float[][] dpadArrowCenters = new float[4][2];
+    private final Path dpadOutlinePath = new Path();
+    private float dpadCachedCx = Float.NaN;
+    private float dpadCachedCy;
+    private float dpadCachedRadius;
     private final Rect iconSourceRect = new Rect();
     private final Rect iconDestinationRect = new Rect();
     private final RectF iconAspectFitDestinationRect = new RectF();
@@ -1465,7 +1477,7 @@ public class ControlElement {
                         canvas.drawPath(path, paint);
                     }
                     drawGameHubGlassOnPath(
-                            canvas, paint, path, cx, cy,
+                            canvas, paint, path, 4, cx, cy,
                             Math.max(boundingBox.width(), boundingBox.height()) * 0.5f, glassEdgeAlpha);
                     paint.setStyle(Paint.Style.STROKE);
                     paint.setColor(engaged ? pressedStrokeColor : strokeColor);
@@ -1518,10 +1530,7 @@ public class ControlElement {
 
 
                 if (glassEdgeAlpha > 0) {
-                    paint.setShader(new RadialGradient(
-                            cx, cy, ringRadius,
-                            Color.argb(0, 0, 0, 0), Color.argb(glassEdgeAlpha, 0, 0, 0),
-                            Shader.TileMode.CLAMP));
+                    paint.setShader(glassShader(4, cx, cy, ringRadius, glassEdgeAlpha));
                     paint.setStyle(Paint.Style.FILL);
                     canvas.drawCircle(cx, cy, ringRadius, paint);
                     paint.setShader(null);
@@ -1551,28 +1560,26 @@ public class ControlElement {
                 float cy = boundingBox.centerY();
 
                 float radius = Math.min(boundingBox.width(), boundingBox.height()) * 0.5f;
-                float[] arrowCenter = new float[2];
                 float arrowGradR = radius * 0.5f;
+                updateDpadPaths(cx, cy, radius);
                 for (int side = 0; side < 4; side++) {
-                    path.reset();
-                    GameHubLayout.buildDpadArrow(path, side, cx, cy, radius);
+                    Path arrowPath = dpadArrowPaths[side];
                     paint.setStyle(Paint.Style.FILL);
                     paint.setColor(fillColor);
-                    canvas.drawPath(path, paint);
+                    canvas.drawPath(arrowPath, paint);
                     if (engaged) {
                         paint.setColor(pressedFillColor);
-                        canvas.drawPath(path, paint);
+                        canvas.drawPath(arrowPath, paint);
                     }
                     if (glassEdgeAlpha > 0) {
-                        GameHubLayout.dpadArrowCenter(side, cx, cy, radius, arrowCenter);
+                        float[] arrowCenter = dpadArrowCenters[side];
                         drawGameHubGlassOnPath(
-                                canvas, paint, path, arrowCenter[0], arrowCenter[1], arrowGradR, glassEdgeAlpha);
+                                canvas, paint, arrowPath, side, arrowCenter[0], arrowCenter[1], arrowGradR, glassEdgeAlpha);
                     }
                 }
-                GameHubLayout.buildDpadArrows(path, cx, cy, radius);
                 paint.setStyle(Paint.Style.STROKE);
                 paint.setColor(engaged ? pressedStrokeColor : strokeColor);
-                canvas.drawPath(path, paint);
+                canvas.drawPath(dpadOutlinePath, paint);
                 break;
             }
             case TRACKPAD: {
@@ -1950,10 +1957,7 @@ public class ControlElement {
         float cx = bb.exactCenterX();
         float cy = bb.exactCenterY();
         float gradR = Math.max(bb.width(), bb.height()) * 0.5f;
-        paint.setShader(new RadialGradient(
-                cx, cy, gradR,
-                Color.argb(0, 0, 0, 0), Color.argb(edgeAlpha, 0, 0, 0),
-                Shader.TileMode.CLAMP));
+        paint.setShader(glassShader(4, cx, cy, gradR, edgeAlpha));
         paint.setStyle(Paint.Style.FILL);
         int snappingSize = inputControlsView.getSnappingSize();
         switch (overrideShape) {
@@ -1977,13 +1981,44 @@ public class ControlElement {
         paint.setShader(null);
     }
 
+    private RadialGradient glassShader(int slot, float cx, float cy, float radius, int alpha) {
+        RadialGradient shader = glassShaders[slot];
+        if (shader == null || glassCx[slot] != cx || glassCy[slot] != cy
+                || glassRadius[slot] != radius || glassAlpha[slot] != alpha) {
+            shader = new RadialGradient(
+                    cx, cy, radius,
+                    Color.argb(0, 0, 0, 0), Color.argb(alpha, 0, 0, 0),
+                    Shader.TileMode.CLAMP);
+            glassShaders[slot] = shader;
+            glassCx[slot] = cx;
+            glassCy[slot] = cy;
+            glassRadius[slot] = radius;
+            glassAlpha[slot] = alpha;
+        }
+        return shader;
+    }
+
+    private void updateDpadPaths(float cx, float cy, float radius) {
+        if (cx == dpadCachedCx && cy == dpadCachedCy && radius == dpadCachedRadius) return;
+        for (int side = 0; side < 4; side++) {
+            dpadArrowPaths[side].reset();
+            GameHubLayout.buildDpadArrow(dpadArrowPaths[side], side, cx, cy, radius);
+            GameHubLayout.dpadArrowCenter(side, cx, cy, radius, dpadArrowCenters[side]);
+        }
+        GameHubLayout.buildDpadArrows(dpadOutlinePath, cx, cy, radius);
+        dpadCachedCx = cx;
+        dpadCachedCy = cy;
+        dpadCachedRadius = radius;
+    }
+
+    private void invalidateSelf() {
+        inputControlsView.invalidateElement(this);
+    }
+
     private void drawGameHubGlassOnPath(
-            Canvas canvas, Paint paint, Path path, float cx, float cy, float gradR, int edgeAlpha) {
+            Canvas canvas, Paint paint, Path path, int slot, float cx, float cy, float gradR, int edgeAlpha) {
         if (edgeAlpha <= 0 || gradR <= 0) return;
-        paint.setShader(new RadialGradient(
-                cx, cy, gradR,
-                Color.argb(0, 0, 0, 0), Color.argb(edgeAlpha, 0, 0, 0),
-                Shader.TileMode.CLAMP));
+        paint.setShader(glassShader(slot, cx, cy, gradR, edgeAlpha));
         paint.setStyle(Paint.Style.FILL);
         canvas.drawPath(path, paint);
         paint.setShader(null);
@@ -2581,6 +2616,7 @@ public class ControlElement {
                     if (currentPosition == null) currentPosition = new PointF();
                     currentPosition.set(x, y);
                 }
+                if (type == Type.D_PAD || type == Type.STICK) invalidateSelf();
                 return handleTouchMove(pointerId, x, y);
             }
         }
@@ -2882,8 +2918,11 @@ public class ControlElement {
 
             if (type == Type.STICK) {
                 if (currentPosition == null) currentPosition = new PointF();
-                currentPosition.x = boundingBox.left + deltaX * radius + radius;
-                currentPosition.y = boundingBox.top + deltaY * radius + radius;
+                float newPositionX = boundingBox.left + deltaX * radius + radius;
+                float newPositionY = boundingBox.top + deltaY * radius + radius;
+                if (currentPosition.x == newPositionX && currentPosition.y == newPositionY) return true;
+                currentPosition.x = newPositionX;
+                currentPosition.y = newPositionY;
 
                 // Directional thumb bindings use unified axes; all others dispatch per slot.
                 Binding firstBinding = getBindingAt(0);
@@ -2926,7 +2965,7 @@ public class ControlElement {
                     }
                 }
 
-                inputControlsView.invalidate();
+                invalidateSelf();
             }
             else if (type == Type.TRACKPAD) {
                 // Directional thumb bindings use unified axes; all others dispatch per slot.
@@ -2992,14 +3031,16 @@ public class ControlElement {
             else {
                 final boolean[] states = {deltaY < -deadZone, deltaX > deadZone, deltaY > deadZone, deltaX < -deadZone};
 
+                boolean slotChanged = false;
                 for (byte i = 0; i < 4; i++) {
                     float value = i == 1 || i == 3 ? deltaX : deltaY;
                     Binding binding = getBindingAt(i);
                     boolean state = binding.isMouseMove() ? (states[i] || states[(i+2)%4]) : states[i];
                     handleBindingSlot(i, state, value);
+                    if (this.states[i] != state) slotChanged = true;
                     this.states[i] = state;
                 }
-                inputControlsView.invalidate();
+                if (slotChanged) invalidateSelf();
             }
 
             return true;
@@ -3058,8 +3099,10 @@ public class ControlElement {
                         visualStickY = 0;
                         lastFingerX = 0;
                         lastFingerY = 0;
+                        inputControlsView.invalidate();
+                    } else {
+                        invalidateSelf();
                     }
-                    inputControlsView.invalidate();
                 }
                 else if (type == Type.MOUSE_AREA) {
                     mouseAreaLastPos = null;
